@@ -1,11 +1,22 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'models.dart';
 
 class OllamaClient {
   final String baseUrl;
 
-  OllamaClient({this.baseUrl = 'http://127.0.0.1:11434'});
+  OllamaClient({String? baseUrl})
+      : baseUrl = baseUrl ?? _defaultBaseUrl();
+
+  static String _defaultBaseUrl() {
+    if (kIsWeb) {
+      // Use the same host the page was loaded from, so LAN/mobile access works
+      final pageHost = Uri.base.host;
+      return 'http://$pageHost:11434';
+    }
+    return 'http://127.0.0.1:11434';
+  }
 
   Future<ChatMessage> chat(String model, List<ChatMessage> messages) async {
     final url = Uri.parse('$baseUrl/api/chat');

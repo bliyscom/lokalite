@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
+import 'package:drift/drift.dart' as drift;
 import 'models.dart';
 import 'ollama_client.dart';
+import 'database.dart';
 
 void main() {
   runApp(
@@ -15,16 +17,28 @@ void main() {
   );
 }
 
+
 class ChatState extends ChangeNotifier {
-  final List<ChatMessage> _messages = [];
+  final List<ChatSession> _sessions = [];
+  String? _currentSessionId;
   final OllamaClient _client = OllamaClient();
+  final AppDatabase _db = AppDatabase();
   String _selectedModel = 'llama3';
   List<String> _availableModels = [];
   bool _isLoading = false;
+  bool _isInitialized = false;
   String? _connectionError;
   String? _pendingImageBase64;
+  Future<void>? _initFuture;
 
-  List<ChatMessage> get messages => _messages;
+  List<ChatSession> get sessions => _sessions;
+  String? get currentSessionId => _currentSessionId;
+  bool get isInitialized => _isInitialized;
+  ChatSession? get currentSession => _sessions.isEmpty 
+      ? null 
+      : _sessions.firstWhere((s) => s.id == _currentSessionId, orElse: () => _sessions.first);
+  
+  List<ChatMessage> get messages => currentSession?.messages ?? [];
   String get selectedModel => _selectedModel;
   List<String> get availableModels => _availableModels;
   bool get isLoading => _isLoading;
@@ -32,7 +46,100 @@ class ChatState extends ChangeNotifier {
   String? get pendingImageBase64 => _pendingImageBase64;
 
   ChatState() {
-    _refreshModels();
+    _initFuture = _init();
+  }
+
+  Future<void> ensureInitialized() async {
+    if (_initFuture != null) await _initFuture;
+  }
+
+  Future<void> _init() async {
+    await _refreshModels();
+    await _loadSessions();
+  }
+
+  Future<void> _loadSessions() async {
+    try {
+      final dbSessions = await _db.getAllSessions();
+      final List<ChatSession> loaded = [];
+      
+      for (final s in dbSessions) {
+        final messages = await _db.getMessagesForSession(s.id);
+        loaded.add(ChatSession(
+          id: s.id,
+          title: s.title,
+          createdAt: s.createdAt,
+          messages: messages.map((m) => ChatMessage(
+            id: m.id,
+            role: m.role,
+            content: m.content,
+            images: m.images != null ? List<String>.from(jsonDecode(m.images!)) : null,
+            timestamp: m.timestamp,
+          )).toList(),
+        ));
+      }
+      
+      // Sort sessions by createdAt descending to keep most recent at top
+      loaded.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+      if (loaded.isNotEmpty) {
+        _sessions.clear();
+        _sessions.addAll(loaded);
+        _currentSessionId = _sessions.first.id;
+      } else if (_sessions.isEmpty) {
+        await createNewChat();
+      }
+    } catch (e) {
+      debugPrint('Error loading sessions: $e');
+    } finally {
+      _isInitialized = true;
+      notifyListeners();
+    }
+  }
+
+  Future<void> createNewChat() async {
+    final newSession = ChatSession(title: 'New Chat');
+    _sessions.insert(0, newSession);
+    _currentSessionId = newSession.id;
+    
+    await _db.insertSession(SessionsCompanion.insert(
+      id: newSession.id,
+      title: newSession.title,
+      createdAt: newSession.createdAt,
+    ));
+    
+    notifyListeners();
+  }
+
+  void selectSession(String id) {
+    _currentSessionId = id;
+    notifyListeners();
+  }
+
+  Future<void> deleteSession(String id) async {
+    _sessions.removeWhere((s) => s.id == id);
+    await _db.deleteMessagesForSession(id);
+    await _db.deleteSession(id);
+    
+    if (_currentSessionId == id) {
+      _currentSessionId = _sessions.isNotEmpty ? _sessions.first.id : null;
+      if (_currentSessionId == null) {
+        await createNewChat();
+      }
+    }
+    notifyListeners();
+  }
+
+  Future<void> renameSession(String id, String newTitle) async {
+    await ensureInitialized();
+    final session = _sessions.where((s) => s.id == id).firstOrNull;
+    if (session != null) {
+      session.title = newTitle;
+      
+      await _db.updateSessionTitle(id, newTitle);
+      
+      notifyListeners();
+    }
   }
 
   Future<void> _refreshModels() async {
@@ -79,41 +186,80 @@ class ChatState extends ChangeNotifier {
 
   Future<void> sendMessage(String text) async {
     if (text.trim().isEmpty && _pendingImageBase64 == null) return;
+    
+    await ensureInitialized();
+    if (_currentSessionId == null || _sessions.isEmpty) await createNewChat();
 
+    final session = currentSession!;
     final List<String>? images = _pendingImageBase64 != null ? [_pendingImageBase64!] : null;
     final userMessage = ChatMessage(role: 'user', content: text, images: images);
-    _messages.add(userMessage);
+    
+    session.messages.add(userMessage);
     _pendingImageBase64 = null;
+    notifyListeners(); // Refresh UI immediately to show user message
+
+    // Save user message and handle background tasks
     _isLoading = true;
     notifyListeners();
+    
+    await _saveMessage(session.id, userMessage);
+    
+    // Auto-rename session if it's the first message
+    if (session.messages.length == 1 && session.title == 'New Chat') {
+      try {
+        final newTitle = text.length > 30 ? '${text.substring(0, 27)}...' : text;
+        await renameSession(session.id, newTitle);
+      } catch (e) {
+        debugPrint('Error renaming session: $e');
+      }
+    }
 
     // Add a placeholder assistant message that we will stream into
-    final assistantMessageIndex = _messages.length;
-    _messages.add(ChatMessage(role: 'assistant', content: ''));
+    final assistantMessage = ChatMessage(role: 'assistant', content: '');
+    session.messages.add(assistantMessage);
+    final assistantMessageIndex = session.messages.length - 1;
     
     try {
-      await for (final chunk in _client.chatStream(_selectedModel, _messages.sublist(0, assistantMessageIndex))) {
-        final currentContent = _messages[assistantMessageIndex].content;
-        _messages[assistantMessageIndex] = ChatMessage(
+      await for (final chunk in _client.chatStream(_selectedModel, session.messages.sublist(0, assistantMessageIndex))) {
+        final currentContent = session.messages[assistantMessageIndex].content;
+        session.messages[assistantMessageIndex] = ChatMessage(
+          id: session.messages[assistantMessageIndex].id,
           role: 'assistant',
           content: currentContent + chunk,
         );
         notifyListeners();
       }
+      // Save final assistant message
+      await _saveMessage(session.id, session.messages[assistantMessageIndex]);
     } catch (e) {
-      _messages[assistantMessageIndex] = ChatMessage(
+      session.messages[assistantMessageIndex] = ChatMessage(
         role: 'assistant',
         content: 'Error: Could not reach Ollama. Ensure it is running and CORS is configured.\n\n`$e`',
       );
+      await _saveMessage(session.id, session.messages[assistantMessageIndex]);
     } finally {
       _isLoading = false;
       notifyListeners();
     }
   }
 
-  void clearChat() {
-    _messages.clear();
-    notifyListeners();
+  Future<void> _saveMessage(String sessionId, ChatMessage message) async {
+    await _db.insertMessage(MessagesCompanion.insert(
+      id: message.id,
+      sessionId: sessionId,
+      role: message.role,
+      content: message.content,
+      images: drift.Value(message.images != null ? jsonEncode(message.images) : null),
+      timestamp: message.timestamp,
+    ));
+  }
+
+  Future<void> clearChat() async {
+    if (_currentSessionId != null) {
+      currentSession?.messages.clear();
+      await _db.deleteMessagesForSession(_currentSessionId!);
+      notifyListeners();
+    }
   }
 }
 
@@ -123,7 +269,7 @@ class OllamaChatApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Ollama Chat',
+      title: 'GovGen',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
@@ -169,8 +315,8 @@ class _ChatPageState extends State<ChatPage> {
     return Scaffold(
       drawer: const Sidebar(),
       appBar: AppBar(
-        title: Text('Chat with ${state.selectedModel}', 
-          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 18)),
+        title: const Text('GovGen', 
+          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 18)),
         backgroundColor: Colors.transparent,
         elevation: 0,
         centerTitle: true,
@@ -185,8 +331,10 @@ class _ChatPageState extends State<ChatPage> {
       body: Column(
         children: [
           Expanded(
-            child: state.messages.isEmpty
-                ? const WelcomeView()
+            child: !state.isInitialized
+                ? const Center(child: CircularProgressIndicator())
+                : state.messages.isEmpty
+                    ? const WelcomeView()
                 : ListView.builder(
                     controller: _scrollController,
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
@@ -259,6 +407,11 @@ class _ChatPageState extends State<ChatPage> {
               onPressed: state.isLoading ? null : state.pickImage,
               tooltip: 'Attach Image',
             ),
+            IconButton(
+              icon: const Icon(Icons.tune, color: Colors.blueAccent),
+              onPressed: state.isLoading ? null : () => _showModelSelectionBottomSheet(context, state),
+              tooltip: 'Select Model',
+            ),
             const SizedBox(width: 8),
             Expanded(
               child: Container(
@@ -272,7 +425,7 @@ class _ChatPageState extends State<ChatPage> {
                   maxLines: 5,
                   minLines: 1,
                   decoration: const InputDecoration(
-                    hintText: 'Ask Ollama anything...',
+                    hintText: 'Ask GovGen anything...',
                     border: InputBorder.none,
                     contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                     hintStyle: TextStyle(color: Colors.white38),
@@ -303,6 +456,85 @@ class _ChatPageState extends State<ChatPage> {
           ],
         ),
       ),
+    );
+  }
+
+  void _showModelSelectionBottomSheet(BuildContext context, ChatState state) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF0F172A),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return Container(
+          padding: const EdgeInsets.symmetric(vertical: 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 24),
+                child: Text(
+                  'Select Model',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              if (state.availableModels.isEmpty)
+                const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(32),
+                    child: Text('No models available', style: TextStyle(color: Colors.white38)),
+                  ),
+                )
+              else
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: state.availableModels.length,
+                    itemBuilder: (context, index) {
+                      final model = state.availableModels[index];
+                      final isSelected = state.selectedModel == model;
+                      return ListTile(
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                        leading: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: isSelected ? Colors.blueAccent.withOpacity(0.1) : Colors.white.withOpacity(0.05),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            Icons.psychology_outlined,
+                            color: isSelected ? Colors.blueAccent : Colors.white38,
+                          ),
+                        ),
+                        title: Text(
+                          model,
+                          style: TextStyle(
+                            color: isSelected ? Colors.blueAccent : Colors.white70,
+                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                          ),
+                        ),
+                        trailing: isSelected 
+                          ? const Icon(Icons.check_circle, color: Colors.blueAccent) 
+                          : null,
+                        onTap: () {
+                          state.setSelectedModel(model);
+                          Navigator.pop(context);
+                        },
+                      );
+                    },
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -412,78 +644,111 @@ class Sidebar extends StatelessWidget {
       backgroundColor: const Color(0xFF0F172A),
       child: Column(
         children: [
-          const DrawerHeader(
-            decoration: BoxDecoration(color: Color(0xFF1E293B)),
+          DrawerHeader(
+            decoration: const BoxDecoration(color: Color(0xFF1E293B)),
             child: Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.auto_awesome, size: 40, color: Colors.blueAccent),
-                  SizedBox(height: 12),
-                  Text('Ollama Web Chat', 
-                    style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                  const Icon(Icons.auto_awesome, size: 40, color: Colors.blueAccent),
+                  const SizedBox(height: 12),
+                  const Text('GovGen', 
+                    style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      state.createNewChat();
+                      Navigator.pop(context); // Close drawer
+                    },
+                    icon: const Icon(Icons.add),
+                    label: const Text('New Chat'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blueAccent,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
                 ],
               ),
             ),
           ),
+          Expanded(
+            child: ListView.builder(
+              itemCount: state.sessions.length,
+              itemBuilder: (context, index) {
+                final session = state.sessions[index];
+                final isSelected = session.id == state.currentSessionId;
+                
+                return ListTile(
+                  selected: isSelected,
+                  selectedTileColor: Colors.blueAccent.withOpacity(0.1),
+                  title: Text(
+                    session.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: isSelected ? Colors.blueAccent : Colors.white70,
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                    ),
+                  ),
+                  onTap: () {
+                    state.selectSession(session.id);
+                    Navigator.pop(context); // Close drawer
+                  },
+                  trailing: PopupMenuButton<String>(
+                    icon: const Icon(Icons.more_vert, color: Colors.white38),
+                    onSelected: (value) {
+                      if (value == 'delete') {
+                        state.deleteSession(session.id);
+                      } else if (value == 'rename') {
+                        _showRenameDialog(context, state, session);
+                      }
+                    },
+                    itemBuilder: (context) => [
+                      const PopupMenuItem(value: 'rename', child: Text('Rename')),
+                      const PopupMenuItem(value: 'delete', child: Text('Delete', style: TextStyle(color: Colors.redAccent))),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+          const Divider(),
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Model Selection', style: TextStyle(color: Colors.white54, fontSize: 12)),
-                const SizedBox(height: 8),
-                if (state.availableModels.isEmpty && !state.isLoading) ...[
-                  Text(state.connectionError ?? 'No models found. Is Ollama running?', 
-                    style: const TextStyle(color: Colors.orangeAccent, fontSize: 12)),
-                  const SizedBox(height: 8),
-                  ElevatedButton.icon(
-                    onPressed: state.retryConnection,
-                    icon: const Icon(Icons.refresh, size: 16),
-                    label: const Text('Retry Connection'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.white10,
-                      foregroundColor: Colors.white,
-                    ),
-                  ),
-                ] else if (state.isLoading && state.availableModels.isEmpty) ...[
-                  const Center(child: Padding(
-                    padding: EdgeInsets.all(8.0),
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )),
-                ] else ...[
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF1E293B),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.white10),
-                    ),
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        value: state.availableModels.contains(state.selectedModel) 
-                          ? state.selectedModel 
-                          : (state.availableModels.isNotEmpty ? state.availableModels.first : null),
-                        isExpanded: true,
-                        dropdownColor: const Color(0xFF1E293B),
-                        items: state.availableModels.map((m) {
-                          return DropdownMenuItem(value: m, child: Text(m));
-                        }).toList(),
-                        onChanged: (val) {
-                          if (val != null) state.setSelectedModel(val);
-                        },
-                      ),
-                    ),
-                  ),
-                ],
+                if (state.connectionError != null)
+                   Text(state.connectionError!, 
+                    style: const TextStyle(color: Colors.orangeAccent, fontSize: 11)),
+                const Text('Connected to Ollama', 
+                  style: TextStyle(color: Colors.white24, fontSize: 11)),
               ],
             ),
           ),
-          const Spacer(),
-          const Padding(
-            padding: EdgeInsets.all(16.0),
-            child: Text('Connected to localhost:11434', 
-              style: TextStyle(color: Colors.white24, fontSize: 11)),
+        ],
+      ),
+    );
+  }
+
+  void _showRenameDialog(BuildContext context, ChatState state, ChatSession session) {
+    final controller = TextEditingController(text: session.title);
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rename Chat'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: 'Enter new title'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () {
+              state.renameSession(session.id, controller.text);
+              Navigator.pop(context);
+            },
+            child: const Text('Save'),
           ),
         ],
       ),
