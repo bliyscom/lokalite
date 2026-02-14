@@ -8,6 +8,17 @@
 
 ---
 
+## 🧠 Supported Models
+
+GovGen is currently tuned to support high-performance local models, including:
+
+- **Specialized**: `goekdenizguelmez/JOSIE`, `wissembijaui/qween-coder`
+- **Thinking & Reasoning**: `lfm2.5-thinking`, `qwen2.5-coder:14b`
+- **Vision & Multimodal**: `qwen3-vl`, `glm-4.7-flash`
+- **General Purpose**: `qwen3:8b`, `qwen2.5:0.5b`
+
+---
+
 ## ✨ Features
 
 - **👁️ Multimodal Support**: Analyze images, charts, and documents natively using Vision-enabled models.
