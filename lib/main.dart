@@ -3,21 +3,240 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:drift/drift.dart' as drift;
 import 'models.dart';
 import 'ollama_client.dart';
 import 'database.dart';
+import 'package:flutter_quill/flutter_quill.dart';
+import 'package:flutter_quill/quill_delta.dart';
 
-void main() {
+class OhadaTheme {
+  static const Color primary = Color(0xFF004D99); // Institutional Blue
+  static const Color accent = Color(0xFFC5A059);  // Imperial Gold
+  
+  // Dark Theme
+  static const Color background = Color(0xFF0A0F0C); // Black Slate
+  static const Color surface = Color(0xFF1B241E);    // Dark Green Slate
+  static const Color border = Colors.white12;
+
+  // Light Theme
+  static const Color lightBackground = Color(0xFFFDFBF7); // Parchment/Sand
+  static const Color lightSurface = Color(0xFFF2EEE4);    // Muted Sand
+  static const Color lightBorder = Colors.black12;
+}
+
+class GovGenLogo extends StatelessWidget {
+  final double size;
+  const GovGenLogo({super.key, this.size = 100});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: CustomPaint(
+        painter: GovGenPainter(),
+      ),
+    );
+  }
+}
+
+class GovGenPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.width / 2;
+
+    // Outer Gold Ring (Institutional Seal)
+    final outerRingPaint = Paint()
+      ..color = OhadaTheme.accent
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = size.width * 0.05;
+    canvas.drawCircle(center, radius * 0.9, outerRingPaint);
+
+    // Inner Forest Green Fill
+    final bgPaint = Paint()
+      ..color = OhadaTheme.primary
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(center, radius * 0.82, bgPaint);
+
+    // Heraldic Shield Path
+    final shieldPath = Path();
+    final sw = size.width;
+    final sh = size.height;
+    shieldPath.moveTo(sw * 0.5, sh * 0.25); // Top center
+    shieldPath.quadraticBezierTo(sw * 0.75, sh * 0.25, sw * 0.75, sh * 0.45);
+    shieldPath.quadraticBezierTo(sw * 0.75, sh * 0.75, sw * 0.5, sh * 0.85); // Bottom tip
+    shieldPath.quadraticBezierTo(sw * 0.25, sh * 0.75, sw * 0.25, sh * 0.45);
+    shieldPath.quadraticBezierTo(sw * 0.25, sh * 0.25, sw * 0.5, sh * 0.25);
+    shieldPath.close();
+
+    final shieldPaint = Paint()
+      ..color = OhadaTheme.accent.withValues(alpha: 0.9)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = sw * 0.03;
+    canvas.drawPath(shieldPath, shieldPaint);
+
+    // Digital Security Motif (Center Node)
+    final nodePaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.8)
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(center, sw * 0.04, nodePaint);
+
+    // Circuit lines coming from the node
+    final linePaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.4)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = sw * 0.015;
+    
+    canvas.drawLine(center, Offset(sw * 0.4, sh * 0.4), linePaint);
+    canvas.drawLine(center, Offset(sw * 0.6, sh * 0.4), linePaint);
+    canvas.drawLine(center, Offset(sw * 0.5, sh * 0.65), linePaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final prefs = await SharedPreferences.getInstance();
   runApp(
     ChangeNotifierProvider(
-      create: (context) => ChatState(),
+      create: (context) => ChatState(prefs),
       child: const OllamaChatApp(),
     ),
   );
 }
 
+class OllamaChatApp extends StatelessWidget {
+  const OllamaChatApp({super.key});
 
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<ChatState>();
+
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'GovGen',
+      themeMode: state.themeMode,
+      theme: ThemeData(
+        brightness: Brightness.light,
+        scaffoldBackgroundColor: OhadaTheme.lightBackground,
+        colorScheme: const ColorScheme.light(
+          primary: OhadaTheme.primary,
+          secondary: OhadaTheme.accent,
+          surface: OhadaTheme.lightSurface,
+        ),
+        dividerColor: OhadaTheme.lightBorder,
+        hintColor: Colors.black38,
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          centerTitle: true,
+          titleTextStyle: TextStyle(
+            color: OhadaTheme.primary,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1.2,
+          ),
+          iconTheme: IconThemeData(color: OhadaTheme.accent),
+        ),
+        cardTheme: CardThemeData(
+          color: OhadaTheme.lightSurface,
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: OhadaTheme.lightBorder),
+          ),
+        ),
+      ),
+      darkTheme: ThemeData(
+        brightness: Brightness.dark,
+        scaffoldBackgroundColor: OhadaTheme.background,
+        colorScheme: const ColorScheme.dark(
+          primary: OhadaTheme.primary,
+          secondary: OhadaTheme.accent,
+          surface: OhadaTheme.surface,
+        ),
+        dividerColor: OhadaTheme.border,
+        hintColor: Colors.white24,
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          centerTitle: true,
+          titleTextStyle: TextStyle(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1.2,
+          ),
+          iconTheme: IconThemeData(color: OhadaTheme.accent),
+        ),
+        cardTheme: CardThemeData(
+          color: OhadaTheme.surface,
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: OhadaTheme.border),
+          ),
+        ),
+      ),
+      home: const MainLayout(),
+    );
+  }
+}
+
+class MainLayout extends StatelessWidget {
+  const MainLayout({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<ChatState>();
+    final isMobile = MediaQuery.of(context).size.width < 700;
+
+    return Scaffold(
+      body: Row(
+        children: [
+          if (!isMobile)
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeInOut,
+              width: state.isSidebarVisible ? 300 : 0,
+              decoration: BoxDecoration(
+                border: Border(right: BorderSide(color: Theme.of(context).dividerColor)),
+              ),
+              child: const Sidebar(),
+            ),
+          
+          // Chat Pane - Only Expanded if it's visible. 
+          // If Document Mode is on and Chat is hidden, this goes away.
+          if (state.isChatVisible)
+            const Expanded(child: ChatPage()),
+
+          // Editor Pane
+          if (!isMobile && state.isDocumentMode)
+            state.isChatVisible 
+              ? AnimatedContainer(
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeInOut,
+                  width: 500,
+                  decoration: BoxDecoration(
+                    border: Border(left: BorderSide(color: Theme.of(context).dividerColor)),
+                  ),
+                  child: const DocumentEditor(),
+                )
+              : const Expanded(child: DocumentEditor()),
+        ],
+      ),
+      drawer: isMobile ? const Sidebar() : null,
+      endDrawer: isMobile && (state.isDocumentMode && !state.isChatVisible) 
+          ? const Drawer(child: DocumentEditor()) 
+          : null,
+    );
+  }
+}
 class ChatState extends ChangeNotifier {
   final List<ChatSession> _sessions = [];
   String? _currentSessionId;
@@ -27,13 +246,24 @@ class ChatState extends ChangeNotifier {
   List<String> _availableModels = [];
   bool _isLoading = false;
   bool _isInitialized = false;
+  bool _isSidebarVisible = true;
+  bool _isDocumentMode = false;
+  bool _isChatVisible = true;
+  ThemeMode _themeMode = ThemeMode.dark;
   String? _connectionError;
   String? _pendingImageBase64;
   Future<void>? _initFuture;
+  final SharedPreferences _prefs;
+  final QuillController _documentController = QuillController.basic();
 
   List<ChatSession> get sessions => _sessions;
   String? get currentSessionId => _currentSessionId;
   bool get isInitialized => _isInitialized;
+  bool get isSidebarVisible => _isSidebarVisible;
+  bool get isDocumentMode => _isDocumentMode;
+  bool get isChatVisible => _isChatVisible;
+  ThemeMode get themeMode => _themeMode;
+  QuillController get documentController => _documentController;
   ChatSession? get currentSession => _sessions.isEmpty 
       ? null 
       : _sessions.firstWhere((s) => s.id == _currentSessionId, orElse: () => _sessions.first);
@@ -44,9 +274,17 @@ class ChatState extends ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get connectionError => _connectionError;
   String? get pendingImageBase64 => _pendingImageBase64;
-
-  ChatState() {
+  
+  ChatState(this._prefs) {
+    _loadThemeFromPrefs();
     _initFuture = _init();
+  }
+
+  void _loadThemeFromPrefs() {
+    final themeIndex = _prefs.getInt('theme_mode');
+    if (themeIndex != null) {
+      _themeMode = ThemeMode.values[themeIndex];
+    }
   }
 
   Future<void> ensureInitialized() async {
@@ -57,6 +295,45 @@ class ChatState extends ChangeNotifier {
     await _refreshModels();
     await _loadSessions();
   }
+
+  void _extractInternalDocument(String content) {
+    // Look for formal document patterns: 
+    // - "To:", "Subject:", "Formal Letter", "Memorandum", 
+    // - Or large blocks of text that look like a letter (Date, Salutation, Body, Closing)
+    
+    // Simple heuristic: if we see "Subject:" and "To:", or common letter starts
+    final lowerContent = content.toLowerCase();
+    final documentMarkers = [
+      'subject:', 'to:', 'from:', 'dear ', 'objet:', 'à l\'attention de',
+      'lettre de', 'memorandum', 'note de service'
+    ];
+    
+    bool hasMarker = documentMarkers.any((m) => lowerContent.contains(m));
+    
+    if (hasMarker) {
+      // If we find a code block marked with 'text' or 'markdown' or just a large block,
+      // we extract it. For now, we'll try to extract the "cleanest" part.
+      
+      String extracted = content;
+      
+      // If the model wrapped it in a code block, strip the backticks
+      final codeBlockMatch = RegExp(r'```(?:[a-zA-Z]*)?\n([\s\S]*?)```').firstMatch(content);
+      if (codeBlockMatch != null) {
+        extracted = codeBlockMatch.group(1) ?? content;
+      }
+      
+      final cleanText = extracted.trim();
+      if (_documentController.document.toPlainText().trim() != cleanText) {
+        _documentController.document = Document()..insert(0, cleanText);
+      }
+      
+      // Auto-open document mode if not already open and we have significant content
+      if (!_isDocumentMode && extracted.length > 50) {
+        _isDocumentMode = true;
+      }
+    }
+  }
+
 
   Future<void> _loadSessions() async {
     try {
@@ -109,6 +386,44 @@ class ChatState extends ChangeNotifier {
     ));
     
     notifyListeners();
+  }
+
+  void toggleSidebar() {
+    _isSidebarVisible = !_isSidebarVisible;
+    notifyListeners();
+  }
+
+  void toggleDocumentMode() {
+    _isDocumentMode = !_isDocumentMode;
+    // If we're closing document mode, ensure chat is visible to avoid a blank screen
+    if (!_isDocumentMode) {
+      _isChatVisible = true;
+    }
+    notifyListeners();
+  }
+
+  void copyToEditor(String content) {
+    _documentController.document = Document()..insert(0, content.trim());
+    if (!_isDocumentMode) {
+      _isDocumentMode = true;
+    }
+    notifyListeners();
+  }
+
+  void toggleChatVisibility() {
+    _isChatVisible = !_isChatVisible;
+    notifyListeners();
+  }
+
+  Future<void> toggleTheme() async {
+    _themeMode = _themeMode == ThemeMode.light ? ThemeMode.dark : ThemeMode.light;
+    notifyListeners();
+    
+    try {
+      await _prefs.setInt('theme_mode', _themeMode.index);
+    } catch (e) {
+      debugPrint('Error saving theme: $e');
+    }
   }
 
   void selectSession(String id) {
@@ -222,11 +537,16 @@ class ChatState extends ChangeNotifier {
     try {
       await for (final chunk in _client.chatStream(_selectedModel, session.messages.sublist(0, assistantMessageIndex))) {
         final currentContent = session.messages[assistantMessageIndex].content;
+        final newContent = currentContent + chunk;
         session.messages[assistantMessageIndex] = ChatMessage(
           id: session.messages[assistantMessageIndex].id,
           role: 'assistant',
-          content: currentContent + chunk,
+          content: newContent,
         );
+        
+        // Smart Extraction
+        _extractInternalDocument(newContent);
+        
         notifyListeners();
       }
       // Save final assistant message
@@ -263,27 +583,6 @@ class ChatState extends ChangeNotifier {
   }
 }
 
-class OllamaChatApp extends StatelessWidget {
-  const OllamaChatApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'GovGen',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        primarySwatch: Colors.blue,
-        scaffoldBackgroundColor: const Color(0xFF0F172A), // Slate-900
-        cardColor: const Color(0xFF1E293B), // Slate-800
-        dividerColor: Colors.white10,
-        fontFamily: 'Inter',
-        useMaterial3: true,
-      ),
-      home: const ChatPage(),
-    );
-  }
-}
 
 class ChatPage extends StatefulWidget {
   const ChatPage({super.key});
@@ -311,21 +610,42 @@ class _ChatPageState extends State<ChatPage> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<ChatState>();
+    final isMobile = MediaQuery.of(context).size.width < 700;
     
     return Scaffold(
-      drawer: const Sidebar(),
       appBar: AppBar(
-        title: const Text('GovGen', 
-          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 18)),
+        leading: isMobile ? null : IconButton(
+          icon: Icon(state.isSidebarVisible ? Icons.menu_open : Icons.menu),
+          onPressed: state.toggleSidebar,
+          tooltip: 'Toggle Sidebar',
+        ),
+        title: Text('GOVGEN', 
+          style: TextStyle(
+            fontWeight: FontWeight.w900, 
+            fontSize: 22, 
+            letterSpacing: 2.0,
+            color: Theme.of(context).appBarTheme.titleTextStyle?.color,
+          )),
         backgroundColor: Colors.transparent,
         elevation: 0,
         centerTitle: true,
         actions: [
           IconButton(
-            icon: const Icon(Icons.delete_outline),
-            onPressed: state.clearChat,
-            tooltip: 'Clear Chat',
+            icon: Icon(state.isDocumentMode ? Icons.article_rounded : Icons.article_outlined, color: OhadaTheme.accent),
+            onPressed: state.toggleDocumentMode,
+            tooltip: 'Toggle Document Mode',
           ),
+          IconButton(
+            icon: Icon(state.themeMode == ThemeMode.light ? Icons.dark_mode_outlined : Icons.light_mode_outlined, color: OhadaTheme.accent),
+            onPressed: state.toggleTheme,
+            tooltip: 'Toggle Theme',
+          ),
+          IconButton(
+            icon: const Icon(Icons.add_circle_outline, color: OhadaTheme.accent),
+            onPressed: state.createNewChat,
+            tooltip: 'New Chat',
+          ),
+          const SizedBox(width: 8),
         ],
       ),
       body: Column(
@@ -346,10 +666,11 @@ class _ChatPageState extends State<ChatPage> {
           ),
           if (state.isLoading)
             const Padding(
-              padding: EdgeInsets.all(8.0),
+              padding: EdgeInsets.symmetric(horizontal: 16),
               child: LinearProgressIndicator(
                 backgroundColor: Colors.transparent,
-                color: Colors.blueAccent,
+                color: OhadaTheme.accent,
+                minHeight: 2,
               ),
             ),
           if (state.pendingImageBase64 != null)
@@ -363,7 +684,7 @@ class _ChatPageState extends State<ChatPage> {
   Widget _buildPendingImagePreview(ChatState state) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      color: const Color(0xFF1E293B),
+      color: Theme.of(context).colorScheme.surface,
       child: Stack(
         children: [
           ClipRRect(
@@ -394,63 +715,90 @@ class _ChatPageState extends State<ChatPage> {
 
   Widget _buildInputArea(ChatState state) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
       decoration: BoxDecoration(
-        color: const Color(0xFF1E293B),
-        border: Border(top: BorderSide(color: Colors.white.withOpacity(0.05))),
+        color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.8),
+        border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
       ),
       child: SafeArea(
         child: Row(
           children: [
-            IconButton(
-              icon: const Icon(Icons.image_outlined, color: Colors.blueAccent),
-              onPressed: state.isLoading ? null : state.pickImage,
-              tooltip: 'Attach Image',
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.05),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.image_outlined, color: OhadaTheme.accent, size: 20),
+                    onPressed: state.isLoading ? null : state.pickImage,
+                    tooltip: 'Attach Image',
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.tune, color: OhadaTheme.accent, size: 20),
+                    onPressed: state.isLoading ? null : () => _showModelSelectionBottomSheet(context, state),
+                    tooltip: 'Select Model',
+                  ),
+                ],
+              ),
             ),
-            IconButton(
-              icon: const Icon(Icons.tune, color: Colors.blueAccent),
-              onPressed: state.isLoading ? null : () => _showModelSelectionBottomSheet(context, state),
-              tooltip: 'Select Model',
-            ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 12),
             Expanded(
               child: Container(
                 decoration: BoxDecoration(
-                  color: const Color(0xFF0F172A),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.white10),
+                  color: Theme.of(context).scaffoldBackgroundColor,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Theme.of(context).dividerColor),
                 ),
                 child: TextField(
                   controller: _controller,
                   maxLines: 5,
                   minLines: 1,
-                  decoration: const InputDecoration(
-                    hintText: 'Ask GovGen anything...',
+                  style: const TextStyle(fontSize: 15),
+                  decoration: InputDecoration(
+                    hintText: 'Consult Governor Intelligence...',
                     border: InputBorder.none,
-                    contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    hintStyle: TextStyle(color: Colors.white38),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    hintStyle: TextStyle(color: Theme.of(context).hintColor, fontSize: 14),
                   ),
                   onSubmitted: (val) {
-                    state.sendMessage(val);
-                    _controller.clear();
-                    _scrollToBottom();
+                    if (val.trim().isNotEmpty) {
+                      state.sendMessage(val);
+                      _controller.clear();
+                      _scrollToBottom();
+                    }
                   },
                 ),
               ),
             ),
             const SizedBox(width: 12),
-            IconButton.filled(
-              onPressed: state.isLoading ? null : () {
-                state.sendMessage(_controller.text);
-                _controller.clear();
-                _scrollToBottom();
+            GestureDetector(
+              onTap: state.isLoading ? null : () {
+                if (_controller.text.trim().isNotEmpty) {
+                  state.sendMessage(_controller.text);
+                  _controller.clear();
+                  _scrollToBottom();
+                }
               },
-              icon: state.isLoading 
-                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.send_rounded),
-              style: IconButton.styleFrom(
-                backgroundColor: Colors.blueAccent,
-                foregroundColor: Colors.white,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: state.isLoading ? Colors.white10 : OhadaTheme.primary,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    if (!state.isLoading)
+                      BoxShadow(
+                        color: OhadaTheme.primary.withValues(alpha: 0.3),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                  ],
+                ),
+                child: state.isLoading 
+                  ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: OhadaTheme.accent))
+                  : const Icon(Icons.send_rounded, color: OhadaTheme.accent, size: 24),
               ),
             ),
           ],
@@ -462,34 +810,37 @@ class _ChatPageState extends State<ChatPage> {
   void _showModelSelectionBottomSheet(BuildContext context, ChatState state) {
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF0F172A),
+      backgroundColor: Theme.of(context).colorScheme.surface,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
       ),
       builder: (context) {
         return Container(
-          padding: const EdgeInsets.symmetric(vertical: 24),
+          padding: const EdgeInsets.symmetric(vertical: 32),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 24),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 32),
                 child: Text(
-                  'Select Model',
+                  'MODEL SELECTION',
                   style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
+                    color: Theme.of(context).brightness == Brightness.light 
+                        ? OhadaTheme.primary 
+                        : OhadaTheme.accent,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 2,
                   ),
                 ),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 24),
               if (state.availableModels.isEmpty)
-                const Center(
+                Center(
                   child: Padding(
-                    padding: EdgeInsets.all(32),
-                    child: Text('No models available', style: TextStyle(color: Colors.white38)),
+                    padding: const EdgeInsets.all(32),
+                    child: Text('NO MODELS DETECTED', style: TextStyle(color: Theme.of(context).hintColor, fontSize: 12, letterSpacing: 1)),
                   ),
                 )
               else
@@ -501,27 +852,30 @@ class _ChatPageState extends State<ChatPage> {
                       final model = state.availableModels[index];
                       final isSelected = state.selectedModel == model;
                       return ListTile(
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 4),
                         leading: Container(
-                          padding: const EdgeInsets.all(8),
+                          padding: const EdgeInsets.all(10),
                           decoration: BoxDecoration(
-                            color: isSelected ? Colors.blueAccent.withOpacity(0.1) : Colors.white.withOpacity(0.05),
-                            shape: BoxShape.circle,
+                            color: isSelected ? OhadaTheme.primary : Theme.of(context).dividerColor.withValues(alpha: 0.05),
+                            borderRadius: BorderRadius.circular(12),
                           ),
                           child: Icon(
-                            Icons.psychology_outlined,
-                            color: isSelected ? Colors.blueAccent : Colors.white38,
+                            Icons.memory,
+                            color: isSelected ? OhadaTheme.accent : Theme.of(context).hintColor,
+                            size: 20,
                           ),
                         ),
                         title: Text(
-                          model,
+                          model.toUpperCase(),
                           style: TextStyle(
-                            color: isSelected ? Colors.blueAccent : Colors.white70,
-                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                            color: isSelected ? OhadaTheme.accent : Theme.of(context).textTheme.bodyMedium?.color?.withValues(alpha: 0.7),
+                            fontWeight: isSelected ? FontWeight.w900 : FontWeight.w400,
+                            fontSize: 13,
+                            letterSpacing: 1,
                           ),
                         ),
                         trailing: isSelected 
-                          ? const Icon(Icons.check_circle, color: Colors.blueAccent) 
+                          ? const Icon(Icons.check_circle, color: OhadaTheme.accent, size: 20) 
                           : null,
                         onTap: () {
                           state.setSelectedModel(model);
@@ -555,25 +909,35 @@ class ChatBubble extends StatelessWidget {
         mainAxisAlignment: isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
         children: [
           if (!isUser) ...[
-            _buildAvatar('A', Colors.indigoAccent),
+            Column(
+              children: [
+                _buildAvatar('A', Colors.indigoAccent),
+                const SizedBox(height: 8),
+                IconButton(
+                  icon: const Icon(Icons.input_rounded, size: 16, color: OhadaTheme.accent),
+                  tooltip: 'Sync to Editor',
+                  onPressed: () => context.read<ChatState>().copyToEditor(message.content),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                ),
+              ],
+            ),
             const SizedBox(width: 12),
           ],
           Flexible(
             child: Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: isUser ? const Color(0xFF3B82F6) : const Color(0xFF1E293B),
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(16),
-                  topRight: const Radius.circular(16),
-                  bottomLeft: Radius.circular(isUser ? 16 : 4),
-                  bottomRight: Radius.circular(isUser ? 4 : 16),
+                color: isUser ? OhadaTheme.primary : Theme.of(context).colorScheme.surface,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: isUser ? OhadaTheme.accent.withValues(alpha: 0.3) : Theme.of(context).dividerColor,
                 ),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
+                    color: Colors.black.withValues(alpha: 0.2),
+                    blurRadius: 12,
+                    offset: const Offset(0, 6),
                   ),
                 ],
               ),
@@ -596,21 +960,31 @@ class ChatBubble extends StatelessWidget {
                     ),
                   ],
                   MarkdownBody(
-                    data: message.content,
-                    selectable: true,
-                    styleSheet: MarkdownStyleSheet(
-                      p: const TextStyle(color: Colors.white, fontSize: 15, height: 1.5),
-                      code: const TextStyle(
-                        backgroundColor: Colors.black26,
-                        fontFamily: 'monospace',
-                        fontSize: 14,
-                      ),
-                      codeblockDecoration: BoxDecoration(
-                        color: Colors.black26,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
+                  data: message.content,
+                  selectable: true,
+                  styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+                    p: TextStyle(color: isUser ? Colors.white : Theme.of(context).textTheme.bodyMedium?.color, fontSize: 15, height: 1.5),
+                    h1: TextStyle(color: isUser ? Colors.white : Theme.of(context).textTheme.displayLarge?.color, fontWeight: FontWeight.bold),
+                    h2: TextStyle(color: isUser ? Colors.white : Theme.of(context).textTheme.displayMedium?.color, fontWeight: FontWeight.bold),
+                    h3: TextStyle(color: isUser ? Colors.white : Theme.of(context).textTheme.displaySmall?.color, fontWeight: FontWeight.bold),
+                    h4: TextStyle(color: isUser ? Colors.white : Theme.of(context).textTheme.headlineMedium?.color, fontWeight: FontWeight.bold),
+                    h5: TextStyle(color: isUser ? Colors.white : Theme.of(context).textTheme.headlineSmall?.color, fontWeight: FontWeight.bold),
+                    h6: TextStyle(color: isUser ? Colors.white : Theme.of(context).textTheme.titleLarge?.color, fontWeight: FontWeight.bold),
+                    em: TextStyle(color: isUser ? Colors.white : Theme.of(context).textTheme.bodyMedium?.color, fontStyle: FontStyle.italic),
+                    strong: TextStyle(color: isUser ? Colors.white : Theme.of(context).textTheme.bodyMedium?.color, fontWeight: FontWeight.bold),
+                    listBullet: TextStyle(color: isUser ? Colors.white : Theme.of(context).textTheme.bodyMedium?.color),
+                    code: TextStyle(
+                      backgroundColor: isUser ? Colors.black12 : Theme.of(context).scaffoldBackgroundColor.withValues(alpha: 0.5),
+                      color: isUser ? Colors.white : Theme.of(context).textTheme.bodyMedium?.color,
+                      fontFamily: 'monospace',
+                      fontSize: 14,
+                    ),
+                    codeblockDecoration: BoxDecoration(
+                      color: isUser ? Colors.black12 : Theme.of(context).scaffoldBackgroundColor.withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(8),
                     ),
                   ),
+                ),
                 ],
               ),
             ),
@@ -640,37 +1014,32 @@ class Sidebar extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = context.watch<ChatState>();
 
-    return Drawer(
-      backgroundColor: const Color(0xFF0F172A),
+    return Container(
+      color: Theme.of(context).colorScheme.surface,
       child: Column(
         children: [
-          DrawerHeader(
-            decoration: const BoxDecoration(color: Color(0xFF1E293B)),
-            child: Center(
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 16),
+            decoration: const BoxDecoration(
+              color: OhadaTheme.primary,
+              borderRadius: BorderRadius.only(bottomLeft: Radius.circular(32)),
+            ),
+            child: const Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Icon(Icons.auto_awesome, size: 40, color: Colors.blueAccent),
-                  const SizedBox(height: 12),
-                  const Text('GovGen', 
-                    style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      state.createNewChat();
-                      Navigator.pop(context); // Close drawer
-                    },
-                    icon: const Icon(Icons.add),
-                    label: const Text('New Chat'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blueAccent,
-                      foregroundColor: Colors.white,
-                    ),
-                  ),
+                  GovGenLogo(size: 64),
+                  SizedBox(height: 16),
+                  Text('GOVGEN', 
+                    style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w900, letterSpacing: 2)),
+                  SizedBox(height: 4),
+                  Text('Harmonized Legal Intelligence', 
+                    style: TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1)),
                 ],
               ),
             ),
           ),
+          const SizedBox(height: 16),
           Expanded(
             child: ListView.builder(
               itemCount: state.sessions.length,
@@ -678,50 +1047,67 @@ class Sidebar extends StatelessWidget {
                 final session = state.sessions[index];
                 final isSelected = session.id == state.currentSessionId;
                 
-                return ListTile(
-                  selected: isSelected,
-                  selectedTileColor: Colors.blueAccent.withOpacity(0.1),
-                  title: Text(
-                    session.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: isSelected ? Colors.blueAccent : Colors.white70,
-                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                return Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  child: ListTile(
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    selected: isSelected,
+                    selectedTileColor: Theme.of(context).brightness == Brightness.light
+                      ? OhadaTheme.primary.withValues(alpha: 0.1)
+                      : OhadaTheme.primary.withValues(alpha: 0.5),
+                    title: Text(
+                      session.title.toUpperCase(),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: isSelected 
+                            ? (Theme.of(context).brightness == Brightness.light ? Colors.black : OhadaTheme.accent)
+                            : Theme.of(context).textTheme.bodyMedium?.color?.withValues(alpha: 0.6),
+                        fontWeight: isSelected ? FontWeight.w900 : FontWeight.w400,
+                        fontSize: 12,
+                        letterSpacing: 0.5,
+                      ),
                     ),
-                  ),
-                  onTap: () {
-                    state.selectSession(session.id);
-                    Navigator.pop(context); // Close drawer
-                  },
-                  trailing: PopupMenuButton<String>(
-                    icon: const Icon(Icons.more_vert, color: Colors.white38),
-                    onSelected: (value) {
-                      if (value == 'delete') {
-                        state.deleteSession(session.id);
-                      } else if (value == 'rename') {
-                        _showRenameDialog(context, state, session);
-                      }
-                    },
-                    itemBuilder: (context) => [
-                      const PopupMenuItem(value: 'rename', child: Text('Rename')),
-                      const PopupMenuItem(value: 'delete', child: Text('Delete', style: TextStyle(color: Colors.redAccent))),
-                    ],
+                    onTap: () => state.selectSession(session.id),
+                    trailing: isSelected ? PopupMenuButton<String>(
+                      icon: const Icon(Icons.more_vert, color: OhadaTheme.accent, size: 20),
+                      onSelected: (value) {
+                        if (value == 'delete') {
+                          state.deleteSession(session.id);
+                        } else if (value == 'rename') {
+                          _showRenameDialog(context, state, session);
+                        }
+                      },
+                      itemBuilder: (context) => [
+                        const PopupMenuItem(value: 'rename', child: Text('Rename')),
+                        const PopupMenuItem(value: 'delete', child: Text('Delete', style: TextStyle(color: Colors.redAccent))),
+                      ],
+                    ) : null,
                   ),
                 );
               },
             ),
           ),
-          const Divider(),
-          Padding(
-            padding: const EdgeInsets.all(16.0),
+          const Divider(color: Colors.transparent),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+              border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
+            ),
             child: Column(
               children: [
                 if (state.connectionError != null)
                    Text(state.connectionError!, 
-                    style: const TextStyle(color: Colors.orangeAccent, fontSize: 11)),
-                const Text('Connected to Ollama', 
-                  style: TextStyle(color: Colors.white24, fontSize: 11)),
+                    style: const TextStyle(color: Colors.orangeAccent, fontSize: 10)),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.circle, size: 8, color: Colors.greenAccent),
+                    SizedBox(width: 8),
+                    Text('SECURE LOCAL NODE', 
+                      style: TextStyle(color: Theme.of(context).hintColor, fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 1)),
+                  ],
+                ),
               ],
             ),
           ),
@@ -766,19 +1152,138 @@ class WelcomeView extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Container(
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.all(40),
             decoration: BoxDecoration(
-              color: Colors.blueAccent.withOpacity(0.1),
-              shape: BoxShape.circle,
+              color: OhadaTheme.primary.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(40),
             ),
-            child: const Icon(Icons.chat_bubble_outline, size: 64, color: Colors.blueAccent),
+            child: const GovGenLogo(size: 100),
           ),
-          const SizedBox(height: 24),
-          const Text('Ready to Chat', 
-            style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 8),
-          const Text('Choose a model and start a conversation.', 
-            style: TextStyle(color: Colors.white54)),
+          const SizedBox(height: 32),
+          const Text('PROTOCOL ENGAGED', 
+            style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900, letterSpacing: 3)),
+          const SizedBox(height: 12),
+          Text('Awaiting Governor Directive for localized inference.', 
+            style: TextStyle(color: Theme.of(context).hintColor, fontSize: 13, letterSpacing: 1)),
+          const SizedBox(height: 48),
+          _buildQuickAction(context, 'INITIALIZE TRANSACTION ARCHIVE'),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQuickAction(BuildContext context, String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Theme.of(context).dividerColor),
+      ),
+      child: Text(label, style: const TextStyle(color: OhadaTheme.accent, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 2)),
+    );
+  }
+}
+
+class DocumentEditor extends StatelessWidget {
+  const DocumentEditor({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<ChatState>();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Container(
+      color: isDark ? OhadaTheme.surface : OhadaTheme.lightSurface,
+      child: Column(
+        children: [
+          AppBar(
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            leading: IconButton(
+              icon: const Icon(Icons.close),
+              onPressed: () => state.toggleDocumentMode(),
+            ),
+            title: const Text(
+              'INSTITUTIONAL DRAFT',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, letterSpacing: 1.5),
+            ),
+            actions: [
+              IconButton(
+                icon: Icon(state.isChatVisible ? Icons.open_in_full_rounded : Icons.close_fullscreen_rounded),
+                tooltip: state.isChatVisible ? 'Focus Mode' : 'Show Chat',
+                onPressed: () => state.toggleChatVisibility(),
+              ),
+              IconButton(
+                icon: const Icon(Icons.copy_rounded),
+                onPressed: () {
+                  // Copy to clipboard logic
+                },
+              ),
+              const SizedBox(width: 8),
+            ],
+          ),
+          
+          // Institutional Rich-Text Toolbar (Matching User Image)
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: isDark ? OhadaTheme.background : Colors.white,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: Theme.of(context).dividerColor.withValues(alpha: 0.1)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.05),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: QuillSimpleToolbar(
+                controller: state.documentController,
+              ),
+            ),
+          ),
+          
+          Expanded(
+            child: Container(
+              margin: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: isDark ? OhadaTheme.background : OhadaTheme.lightBackground,
+                borderRadius: BorderRadius.circular(4),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.1),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Stack(
+                children: [
+                   // Parchment Texture Overlay (Subtle)
+                  Positioned.fill(
+                    child: Opacity(
+                      opacity: 0.03,
+                      child: Image.network(
+                        'https://www.transparenttextures.com/patterns/parchment.png',
+                        repeat: ImageRepeat.repeat,
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(40),
+                    child: QuillEditor.basic(
+                      controller: state.documentController,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );

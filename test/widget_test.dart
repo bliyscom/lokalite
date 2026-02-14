@@ -11,12 +11,17 @@ import 'package:provider/provider.dart';
 
 import 'package:govgen/main.dart';
 
+import 'package:shared_preferences/shared_preferences.dart';
+
 void main() {
   testWidgets('GovGen app smoke test', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+    
     // Build our app and trigger a frame.
     await tester.pumpWidget(
       ChangeNotifierProvider(
-        create: (context) => ChatState(),
+        create: (context) => ChatState(prefs),
         child: const OllamaChatApp(),
       ),
     );
